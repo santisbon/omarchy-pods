@@ -46,6 +46,25 @@ matter to this widget:
 - **Memory and reliability work**: the QML engine load is deferred under
   `--hide`, and the daemon no longer grabs the pods on every local playback.
 
+## Modified for Oaxaca
+
+| | |
+|---|---|
+| Forked from | https://github.com/thisisgm/omarchy-pods at `fff7fec` |
+| Modified by | santisbon, 2026-10-26 |
+
+- **An AppArmor profile**, `apparmor/librepods`, confines the daemon's files,
+  programs and D-Bus calls. `setup` installs it to `/etc/apparmor.d/librepods`.
+- **The unit's capability and namespace settings are removed.** On Ubuntu a user
+  service cannot drop capabilities, which fails the start with
+  `218/CAPABILITIES`, and cannot get the namespaces `ProtectHome` and the rest
+  need, so they were never applied.
+- **WirePlumber is restarted over D-Bus** (`RestartUnit` on the session bus)
+  instead of `systemctl --user`, whose private socket the profile denies.
+
+See the repository README's "What changed in the fork" for the reasons and the
+checks.
+
 ## Building it
 
 ```bash

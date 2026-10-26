@@ -1,272 +1,323 @@
-<h1 align="center">AirPods for Omarchy</h1>
+<h1 align="center">AirPods for Oaxaca</h1>
 
 <p align="center">
-  Battery for each pod and the case, the listening modes, adaptive noise level, Conversation Awareness, One-Bud ANC and ear detection, drawn in Omarchy's own panel idiom.
+  Battery for each pod and the case, the listening modes, adaptive noise level, Conversation Awareness, One-Bud ANC and ear detection, in the Oaxaca bar.
 </p>
 
 <p align="center">
-  <a href="https://omarchyplugins.com/plugin.html?id=io.github.thisisgm.omapods"><img alt="On omarchyplugins.com" src="https://img.shields.io/badge/omarchyplugins.com-listed-8b5cf6"></a>
-  <a href="https://github.com/thisisgm/omarchy-pods/tags"><img alt="Latest tag" src="https://img.shields.io/github/v/tag/thisisgm/omarchy-pods?label=version"></a>
+  <img src="preview.png" alt="The AirPods panel open in the bar" width="420">
 </p>
 
-<p align="center">
-  <img src="preview.png" alt="The AirPods panel open in the Omarchy bar" width="420">
-</p>
+This is a fork of [thisisgm/omarchy-pods](https://github.com/thisisgm/omarchy-pods)
+for [Oaxaca](https://oaxaca.page), a port of Omarchy to Ubuntu 26.10. The panel is
+upstream's, unchanged. The daemon is confined by an AppArmor profile instead of
+systemd's sandbox, which does not take effect on Ubuntu; see
+[What changed in the fork](#what-changed-in-the-fork). Upstream's README, with its
+steps for Omarchy on Arch, is kept in [README.upstream.md](README.upstream.md); its
+panel keyboard shortcuts, settings and notes on the output codec apply here too.
+
+## Pair the AirPods
+
+Pair the AirPods before installing, or skip this section if they are already paired
+with this computer. AirPods advertise under Bluetooth Low Energy
+addresses that change, and pairing one of those from the Bluetooth panel does not
+pair the AirPods' audio link, so pair their classic Bluetooth address instead.
+The daemon still reads the Low Energy advertisements, without pairing, for the
+battery, in-ear and case lid state; audio and the controls run over the classic
+link.
+[The daemon](#the-daemon)'s continuous Low Energy scan interferes with pairing, so
+when you pair AirPods after installing, Step 1 and Step 4 stop and restart it.
+
+**Step 1.** Only if this plugin or upstream's is already installed, stop the daemon:
+
+```bash
+systemctl --user stop librepods.service
+```
+
+**Step 2.** Put the AirPods in pairing mode: AirPods in the case, lid open, and
+the case's status light flashing white. On AirPods Pro 3, double-tap the front of
+the case; on a case with a setup button on the back, press and hold the button.
+While the light flashes, scan for classic Bluetooth devices for 30 seconds:
+
+```bash
+bluetoothctl --timeout 30 scan bredr
+```
+
+Note the address on the `[NEW] Device XX:XX:XX:XX:XX:XX … AirPods …` line.
+
+**Step 3.** With the light still flashing, put that address in place of
+`XX:XX:XX:XX:XX:XX` and run:
+
+```bash
+A=XX:XX:XX:XX:XX:XX; bluetoothctl pair $A && bluetoothctl trust $A && bluetoothctl connect $A
+```
+
+It prints `Pairing successful`, then `Connection successful`.
+
+**Step 4.** Only if you stopped the daemon in Step 1, start it:
+
+```bash
+systemctl --user start librepods.service
+```
+
+## Install
+
+[setup](#setup) asks for `sudo` twice: once to install the build tools `cmake`
+and `ninja-build`, and once to install and load
+[the AppArmor profile](#the-apparmor-profile). It stops with an error before
+building anything if AppArmor is not enabled, so [the daemon](#the-daemon) never
+runs unconfined.
+
+**Step 1.** Only if upstream's plugin (thisisgm/omarchy-pods) is installed,
+remove it. The fork keeps upstream's plugin ID, `io.github.thisisgm.omapods`, so
+the two can't be installed at once. This deletes only the plugin's folder; Step 3
+replaces upstream's daemon, and the AirPods' pairing and settings in
+`~/.config/AirPodsTrayApp` carry over:
+
+```bash
+oaxaca plugin remove io.github.thisisgm.omapods
+```
+
+**Step 2.** Add the plugin. When it asks which bar section to use, choose
+**right**:
+
+```bash
+oaxaca plugin add https://github.com/santisbon/omarchy-pods --enable
+```
+
+**Step 3.** Build and start the daemon:
+
+```bash
+~/.config/omarchy/plugins/io.github.thisisgm.omapods/setup
+```
+
+**Step 4.** Check that the daemon runs under the profile:
+
+```bash
+cat /proc/$(systemctl --user show -p MainPID --value librepods.service)/attr/current; echo
+```
+
+It prints `librepods (enforce)`.
+
+**Step 5.** Optional. The icon stays hidden until AirPods are connected. To keep
+it visible:
+
+```bash
+oaxaca bar set io.github.thisisgm.omapods hideWhenDisconnected false --json
+```
+
+## Update
+
+`oaxaca plugin update` pulls the new commits but does not run
+[setup](#setup), so run setup after it to rebuild the daemon and reload the
+profile.
+
+**Step 1.** Pull the new commits:
+
+```bash
+oaxaca plugin update io.github.thisisgm.omapods
+```
+
+**Step 2.** Rebuild the daemon and reload the profile:
+
+```bash
+~/.config/omarchy/plugins/io.github.thisisgm.omapods/setup
+```
+
+## Remove
+
+**Step 1.** Stop and disable the daemon, and delete the files CMake installed.
+`install_manifest.txt` is in the plugin's build folder, so this runs before the
+plugin's folder goes:
+
+```bash
+systemctl --user disable --now librepods.service && xargs rm -f < ~/.config/omarchy/plugins/io.github.thisisgm.omapods/daemon/build/install_manifest.txt
+```
+
+**Step 2.** Unload and delete the AppArmor profile:
+
+```bash
+sudo apparmor_parser -R /etc/apparmor.d/librepods && sudo rm /etc/apparmor.d/librepods
+```
+
+**Step 3.** Delete the daemon's settings and status. `~/.config/AirPodsTrayApp`
+holds the AirPods' pairing secrets (`magicAccIRK`, `magicAccEncKey`):
+
+```bash
+rm -rf ~/.config/AirPodsTrayApp ~/.local/state/librepods
+```
+
+**Step 4.** Remove the plugin:
+
+```bash
+oaxaca plugin remove io.github.thisisgm.omapods
+```
+
+## Terms
+
+### Oaxaca
+
+A Linux distribution that ports Omarchy's desktop (Hyprland and Omarchy's bar and
+panels) to Ubuntu 26.10. Its commands are `oaxaca …`, and `omarchy …` runs the same
+commands.
+
+### The panel
+
+The bar widget: the AirPods icon in the bar and the panel that opens when you click
+it, written in QML (`Panel.qml`, `AirPodsIcon.qml`, `Model.js`). It only reads a
+status file and sends commands; it never talks to Bluetooth.
+
+### The daemon
+
+`librepods`, a modified copy of [librepods](https://github.com/kavishdevar/librepods)
+in [`daemon/`](daemon/). It talks to the AirPods over Bluetooth, writes their
+status to `~/.local/state/librepods/status.json` for [the panel](#the-panel), and
+takes the panel's commands through `librepods-ctl`. It is installed to
+`~/.local/bin/librepods` and run by the systemd user service `librepods.service`
+(`~/.local/share/systemd/user/librepods.service`).
+
+### setup
+
+The script `setup` at the top of this repository. `oaxaca plugin add` only clones
+the repository, and `setup` does the rest: it builds [the daemon](#the-daemon),
+installs it, installs [the AppArmor profile](#the-apparmor-profile) and starts the
+service.
+
+### The AppArmor profile
+
+[`daemon/apparmor/librepods`](daemon/apparmor/librepods), the AppArmor rules that
+limit which files, programs and D-Bus calls [the daemon](#the-daemon) can reach.
+[setup](#setup) installs it to `/etc/apparmor.d/librepods`. AppArmor attaches it
+by path to every process started from `~/.local/bin/librepods`.
 
 ## What it shows
 
 - **Battery** for the left pod, the right pod and the case, each with a charging
-  and in-ear hint. Nothing else on a Linux box knows these numbers: BlueZ does
-  not expose `org.bluez.Battery1` for AirPods.
-- **Listening mode**, and only the modes the device actually has. AirPods 1, 2, 3
-  and the plain AirPods 4 get no section at all, AirPods Pro 3 dropped Off, and
-  Adaptive needs an H2 part that also has noise cancellation, so the panel asks
-  the daemon rather than assuming four rows.
-- **Adaptive noise level**, shown only while Adaptive is the active mode.
-- **Conversation Awareness** on the same models that have Adaptive, and
-  **One-Bud ANC** on the ones with a second bud, which is why an AirPods Max 2
-  shows the first and not the second.
-- **Ear detection**: pause when one pod is out, pause when both are out, or
-  never pause.
-- **Case lid**, when the case has broadcast its state. Lid state comes from BLE
-  advertisements, and the daemon pauses that discovery while the control link is
-  up, because discovery running alongside a live link is what the crackle in issue
-  26 tracks. So lid state holds its last value for as long as the pods stay
-  connected, and the case level may keep refreshing over the control link, as it
-  does here, or hold like the lid, as the issue 26 reporter saw. Per-pod battery, ANC and ear detection keep updating
-  throughout.
-- **A mark that matches the hardware**: stemmed buds, AirPods Pro or AirPods Max,
-  chosen from the model the daemon reports. AirPods Max carry no case, so their
-  panel drops the case row and shows a single headphone battery.
+  and in-ear hint. BlueZ does not expose `org.bluez.Battery1` for AirPods, so
+  nothing else on the system knows these numbers.
+- **Listening mode**, only the modes the model has.
+- **Adaptive noise level**, while Adaptive is the active mode.
+- **Conversation Awareness** and **One-Bud ANC** on the models that have them.
+  One-Bud ANC keeps noise cancellation on with a single pod in your ear; with both
+  in, it changes nothing.
+- **Ear detection**: pause when one pod is out, pause when both are out, or never
+  pause.
+- **Case lid**, from the case's Bluetooth advertisements. The lid state holds its
+  last value while the pods stay connected.
 
-## Deliberately absent
-
-- **Volume and output device** live in the stock Audio panel, which already
-  switches PipeWire sinks. Press `Tab` in this panel to walk to it.
-- **Connect, disconnect and forget** live in the stock Bluetooth panel, and in
-  `omarchy bluetooth device`.
-- **Spatial Audio** has no renderer on Linux, so there is nothing to draw and
-  no row for it.
-- **Mic mode** is not an AirPods control. macOS applies Voice Isolation to the
-  input stream itself, for any microphone, and the AAP protocol carries no mic
-  packet. Input mute and input device live in the stock Audio panel.
+Volume, output device, connect, disconnect and forget are left to Oaxaca's own
+Audio and Bluetooth panels and to `oaxaca bluetooth device`.
 
 ## Screenshots
 
-The panel is built from the capability keys the daemon publishes, so three
-different AirPods give three different panels. Same plugin, same build, nothing
-configured differently between them.
-
 | | | |
 |:---:|:---:|:---:|
-| <img src="docs/panel-model-airpods4.png" alt="AirPods 4 with ANC"><br>**AirPods 4 with ANC**<br>all four modes, and One-Bud ANC to hold them with one pod in | <img src="docs/panel-model-pro3.png" alt="AirPods Pro 3"><br>**AirPods Pro 3**<br>no Off row: the Pro 3 dropped it | <img src="docs/panel-model-max2.png" alt="AirPods Max 2"><br>**AirPods Max 2**<br>one battery, no case, and no One-Bud ANC to offer |
+| <img src="docs/panel-model-airpods4.png" alt="AirPods 4 with ANC"><br>**AirPods 4 with ANC** | <img src="docs/panel-model-pro3.png" alt="AirPods Pro 3"><br>**AirPods Pro 3**, which has no Off mode | <img src="docs/panel-model-max2.png" alt="AirPods Max 2"><br>**AirPods Max 2**, one battery and no case |
+| <img src="docs/panel-noise-cancellation.png" alt="Noise Cancellation"><br>Noise Cancellation | <img src="docs/panel-adaptive.png" alt="Adaptive"><br>Adaptive, with the noise level | <img src="docs/panel-in-case.png" alt="Both pods in the case"><br>Both pods charging, lid closed |
 
-Both AirPods 4 variants say **AirPods 4** in the title, because the name is the
-family and the rows underneath are what the unit can actually do. The plain
-AirPods 4 has no listening modes at all, so it gets no listening section.
+The screenshots are upstream's, taken on Omarchy.
 
-Every screenshot in this section, the Pro 3 included, was made by writing one
-status line by hand and photographing the panel that came back. An AirPods Pro 3
-is the only pair on hand here, and it would not have posed for all of these
-anyway. It works because the panel reads that file and nothing else.
+## What changed in the fork
 
-### States
+### Why systemd's sandbox does not work on Oaxaca
 
-| | |
-|:---:|:---:|
-| <img src="docs/panel-noise-cancellation.png" alt="Noise Cancellation"><br>Noise Cancellation, both pods in | <img src="docs/panel-adaptive.png" alt="Adaptive"><br>Adaptive, with the noise level and Conversation Awareness on |
-| <img src="docs/panel-transparency.png" alt="Transparency"><br>Transparency | <img src="docs/panel-one-bud.png" alt="One pod in the case"><br>One pod in the case, lid open, One-Bud ANC on |
-| <img src="docs/panel-in-case.png" alt="Both pods in the case"><br>Both pods charging, lid closed | <img src="docs/panel-daemon-down.png" alt="Daemon not running"><br>librepods not running |
+Upstream's `librepods.service` sandboxes the daemon with systemd settings. On
+Oaxaca, those settings either stop the service from starting or are silently
+skipped:
 
-## Requirements
+- **Capability settings fail the start.** `CapabilityBoundingSet=`,
+  `ProtectKernelModules=yes`, `ProtectKernelLogs=yes` and `ProtectClock=yes` each
+  remove capabilities from the process, which a user's systemd instance has no
+  privilege to do. The start fails with `status=218/CAPABILITIES` ("Failed to drop
+  capabilities: Operation not permitted"), and the service restarts every 5
+  seconds. A user service holds none of those capabilities anyway.
+- **Namespace settings are skipped.** `ProtectSystem`, `ProtectHome`,
+  `ReadWritePaths`, `PrivateTmp`, `ProtectHostname`, `ProtectKernelTunables` and
+  `ProtectControlGroups` need a private mount namespace. A user's systemd instance
+  can only create one inside a user namespace, and Ubuntu restricts those
+  (`kernel.apparmor_restrict_unprivileged_userns = 1`). The process that creates
+  one is moved into Ubuntu's `unprivileged_userns` AppArmor profile, which denies
+  the capability the mounts need, so systemd starts the daemon without them. The
+  daemon then runs in the same mount namespace as the desktop, with all of home
+  writable. Combined with [the AppArmor profile](#the-apparmor-profile), the
+  namespace settings also make the daemon run under the stacked label
+  `librepods//&unprivileged_userns`, which denies its system bus calls.
+- **D-Bus was never filtered.** The daemon needs both buses: the system bus for
+  BlueZ and logind, the session bus for media players and notifications. Without
+  a filter, the session bus lets any process ask the user's systemd to start a
+  command (`StartTransientUnit`), and that command runs outside every sandbox.
+  This holds on any distribution, with or without the namespace settings.
 
-- **The daemon in [`daemon/`](daemon/), built and running.** It ships in this
-  repository because nothing packaged will do: upstream librepods and every AUR
-  package built from it carry no state file, no `status` verb, none of the
-  `ca:`, `onebud:` or `adaptive:` verbs, and a model map that stops before
-  AirPods Pro 3, so the panel would stay hidden forever. The copy here carries
-  every model number Apple lists as of August 2026, up to the 2026 AirPods
-  Max 2, and what each of those models can actually do. See [daemon/UPSTREAM.md](daemon/UPSTREAM.md)
-  for what it is, who wrote it and what was changed. `omarchy plugin add` only
-  clones the plugin; `setup` builds the daemon.
-- AirPods paired to the machine through the usual Bluetooth flow.
+### Changes
 
-## How it works
+| File | Change |
+|---|---|
+| [`daemon/apparmor/librepods`](daemon/apparmor/librepods) | New: [the AppArmor profile](#the-apparmor-profile). |
+| [`daemon/librepods.service`](daemon/librepods.service) | The capability and namespace settings are removed. `NoNewPrivileges`, `RestrictSUIDSGID`, `RestrictNamespaces`, `LockPersonality`, `SystemCallArchitectures`, `RestrictAddressFamilies=AF_UNIX AF_BLUETOOTH AF_NETLINK` (no IP networking) and `UMask=0077` stay; they work without namespaces. |
+| [`daemon/media/mediacontroller.cpp`](daemon/media/mediacontroller.cpp) | The WirePlumber restart is a D-Bus `RestartUnit` call on the session bus instead of `systemctl --user restart wireplumber`. `systemctl --user` uses systemd's private socket, which the profile denies. |
+| [`setup`](setup) | Stops if AppArmor is not enabled, then installs the profile to `/etc/apparmor.d/librepods` and loads it with `apparmor_parser -r`. |
 
-The plugin does not poll. The daemon writes its status to
-`$XDG_STATE_HOME/librepods/status.json` whenever that status changes, and
-removes the file when it stops. The panel watches it, so an idle desktop runs no
-processes at all on its behalf. `librepods-ctl` is used only when you actually
-change something.
+### What the profile allows
 
-The plugin never talks to Bluetooth itself. If `librepods-ctl` is missing or
-the daemon is not running, the panel says so in one line instead of drawing an
-empty surface.
+- **Files:**
+  - read the system's configuration, PulseAudio's client settings,
+    `/etc/machine-id`, the boot ID and other processes' command lines (Qt reads
+    `bluetoothd`'s to find its version);
+  - read and write only `~/.config/AirPodsTrayApp/`, `~/.local/state/librepods/`
+    and the control socket `/run/user/<uid>/librepods.sock`;
+  - nothing else in home.
+- **Sockets:** Bluetooth, netlink and local Unix sockets. The system bus, the
+  session bus and PulseAudio's socket are allowed. systemd's private socket
+  `/run/user/<uid>/systemd/private` is denied, because it reaches systemd's
+  whole API without passing through the D-Bus rules.
+- **Programs**, each confined by the same profile: `bluetoothctl`,
+  `bluetoothd --version`, and `oaxaca notification send` with the shell and tools
+  its scripts use.
+- **D-Bus calls:**
+  - system bus: BlueZ's discovery, connect, disconnect, remove and profile
+    registration calls, BlueZ's and logind's properties;
+  - session bus: media players' MPRIS calls (pause and resume on ear detection),
+    desktop notifications, and systemd's `RestartUnit`;
+  - nothing that starts a new unit or command.
 
-### The output codec, and what the microphone costs
+Rules for one machine go in `/etc/apparmor.d/local/librepods`, which the profile
+includes if it exists and [setup](#setup) does not overwrite.
 
-The daemon always selects the highest-bitrate playback profile the card offers,
-which is SBC-XQ at 453 kbps ahead of SBC at 328 and AAC at 256. That is the
-default, and it is re-applied every time the daemon activates the card, because
-PipeWire's own profile priority puts AAC first and would otherwise win.
+### How the profile was checked
 
-Selecting the AirPods as a **microphone** gives that up. Over the standard
-Bluetooth profiles, two-way voice runs on a separate low-bandwidth channel, so
-the only profiles exposing a source are `headset-head-unit` at 16 kHz mSBC and
-`headset-head-unit-cvsd` at 8 kHz, and each one replaces the playback profile
-rather than joining it. A card cannot offer a high-quality sink and a microphone
-at the same time. macOS is bound by the same profiles and simply negotiates a
-better voice codec on them.
+On Oaxaca 26.10 with AirPods Pro 3, on 2026-10-26. The rules were written from
+what AppArmor logged in complain mode (which logs accesses without blocking them)
+while every panel control, ear detection, the case lid and a reconnect were used.
+Then, in enforce mode, each row below ran under the profile with
+`aa-exec -p librepods`:
 
-So take the microphone from another device and leave the AirPods on SBC-XQ. The
-daemon helps here: it defers its activation ladder while a capture is live, so it
-will not pull a live call off the headset profile mid-sentence.
-
-If the headset profiles are missing from the card altogether, so that nothing can
-offer the AirPods microphone at all, BlueZ has no HFP connection to the device.
-The card carries those two profiles only while that connection is up, which is
-why nothing logs an error: no profile is malformed, one is simply not connected.
-Reconnecting that one profile brings them back within a few seconds and leaves
-A2DP playing:
-
-```bash
-busctl call org.bluez /org/bluez/hci0/dev_<MAC> org.bluez.Device1 \
-  ConnectProfile s 0000111e-0000-1000-8000-00805f9b34fb
-```
-
-Disconnecting and reconnecting the whole device also works, at the cost of the
-playback link. This daemon registers no Bluetooth profile, so that list is
-BlueZ's and PipeWire's to produce.
-
-There is a route around all of this that uses no audio profile at all: the AirPods
-can send a high-resolution microphone stream over the same AACP channel this
-daemon already uses for battery and controls, which leaves A2DP playback running
-untouched. Upstream librepods has an implementation of it for its Rust rewrite in
-[PR 655](https://github.com/kavishdevar/librepods/pull/655), unmerged at the time
-of writing. Nothing in this daemon does that today.
-
-## Install
-
-```bash
-omarchy plugin add https://github.com/thisisgm/omarchy-pods --enable
-~/.config/omarchy/plugins/io.github.thisisgm.omapods/setup
-```
-
-`--enable` already places the widget on the right of the bar. The
-[marketplace listing](https://omarchyplugins.com/plugin.html?id=io.github.thisisgm.omapods)
-installs to the same place.
-
-`setup` installs `cmake`, `ninja`, `qt6-connectivity`, `qt6-tools`,
-`qt6-declarative`, `pkgconf` and `libpulse` if they are missing, builds the
-daemon into `~/.local`, and enables `librepods.service`. The icon stays hidden
-until AirPods are connected (`hideWhenDisconnected`). To keep it visible:
-
-```bash
-omarchy bar set io.github.thisisgm.omapods hideWhenDisconnected false --json
-```
-
-To build the daemon by hand instead of running `setup`:
-
-```bash
-omarchy pkg add cmake ninja qt6-connectivity qt6-tools qt6-declarative pkgconf libpulse
-cd ~/.config/omarchy/plugins/io.github.thisisgm.omapods/daemon
-cmake -B build -G Ninja -DBUILD_TESTING=OFF && cmake --build build
-cmake --install build --prefix ~/.local
-systemctl --user daemon-reload
-systemctl --user enable librepods.service
-systemctl --user restart librepods.service
-```
-
-`~/.local` is the prefix the unit expects, because it runs
-`%h/.local/bin/librepods`, and Omarchy already puts `~/.local/bin` on `PATH`,
-which is where the panel finds `librepods-ctl`. The unit is bound to
-`graphical-session.target`, so the daemon comes back after a reboot.
-
-## Remove
-
-```bash
-systemctl --user disable --now librepods.service
-xargs rm -f < ~/.config/omarchy/plugins/io.github.thisisgm.omapods/daemon/build/install_manifest.txt
-rm -rf ~/.config/AirPodsTrayApp ~/.local/state/librepods
-omarchy plugin remove io.github.thisisgm.omapods
-```
-
-The daemon installs into `~/.local`, so it outlives the plugin. CMake lists what it
-put there in `install_manifest.txt`, which lives in the build tree, so that line has
-to run before the plugin directory goes.
-
-`~/.config/AirPodsTrayApp` holds the paired device's name and its `magicAccIRK` and
-`magicAccEncKey`, which are pairing secrets, so the directory and the file are created
-owner only and both go with the plugin. `~/.local/state/librepods/status.json` is the
-published status line the panel reads, and it goes too.
-
-## Keyboard
-
-| Key | Action |
-|-----|--------|
-| `j` / `k`, `↓` / `↑` | move between rows |
-| `enter` / `space` | activate the current row |
-| `←` / `→` | adjust the adaptive noise level |
-| `o` | Off, on the models that have it |
-| `t` | Transparency |
-| `a` | Adaptive |
-| `n` | Noise Cancellation |
-| `c` | toggle Conversation Awareness |
-| `b` | toggle One-Bud ANC |
-| `e` | cycle ear detection |
-| `r` | refresh |
-| `tab` | move to the next panel |
-| `esc` | close |
-
-Every listening key is ignored on a device the daemon says lacks the mode, so
-`a` does nothing on an AirPods Pro 1 and the four mode keys do nothing on an
-AirPods 3. A daemon older than the capability keys cannot say, and the panel
-falls back to what it gated on before.
-
-Left click opens the panel. Right click cycles the listening mode without
-opening anything.
-
-## Settings
-
-| Setting | Default | Notes |
-|---------|---------|-------|
-| Hide when disconnected | on | Leaves the bar entirely rather than sitting there with nothing to say. |
-| Path to librepods-ctl | empty | Leave empty to find it on `PATH`. |
-
-## Tests
-
-`Model.js` holds the parsing and formatting, with no QML imports, so it runs
-outside the shell. The suite covers the shapes that bite: the objects the daemon
-omits entirely, a pod it has stopped hearing from, an empty file, a line that is
-not JSON, and a schema newer than this panel reads.
-
-```bash
-deno run --allow-read tests/model.test.js
-```
-
-## Contributing
-
-Bug reports and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md)
-covers the build, what review will ask you to prove, and the house style;
-[AGENTS.md](AGENTS.md) adds the traps coding agents hit in this tree.
+| Check | Result |
+|---|---|
+| Read `~/.bashrc` | denied |
+| Write to `~/.cache` | denied |
+| `StartTransientUnit` over the session bus, to run `touch` outside the profile | denied (`Call failed: Access denied`) |
+| Open a TCP connection to `1.1.1.1:443` | denied |
+| `RestartUnit` on a test unit | allowed, the unit restarted |
+| `oaxaca notification send` | allowed, exit status 0 |
+| `bluetoothctl devices Connected` | allowed, the AirPods were listed |
+| The daemon itself | `librepods (enforce)`, AirPods connected, no denials logged |
 
 ## Credits
 
-The hard part is not this panel. It is
-[librepods](https://github.com/kavishdevar/librepods) by **Kavish Devar**, which
-reverse-engineered Apple's AAP protocol over L2CAP and the BLE advertisement
-path that carries battery, in-ear and case lid state. The daemon in `daemon/` is
-a modified copy of his work, and this panel is a display for it.
+[librepods](https://github.com/kavishdevar/librepods) by **Kavish Devar**
+reverse-engineered Apple's AAP protocol over L2CAP and the Bluetooth Low Energy
+advertisements that carry battery, in-ear and case lid state. The daemon in
+`daemon/` is a modified copy of his work.
 
-## Support
-
-If this saved you an afternoon, you can
-[buy me a coffee](https://buymeacoffee.com/thisisgm).
+The panel, and the daemon's changes recorded in
+[daemon/UPSTREAM.md](daemon/UPSTREAM.md), are by **GM** in
+[thisisgm/omarchy-pods](https://github.com/thisisgm/omarchy-pods). You can
+[buy GM a coffee](https://buymeacoffee.com/thisisgm).
 
 ## Licence
 
-Two programs live here, and they are licensed separately because they are
-separate works that talk over a state file and a command line.
+Two programs live here, licensed separately because they are separate works that
+talk over a status file and a command line.
 
 | Path | Licence | |
 |---|---|---|
@@ -274,13 +325,11 @@ separate works that talk over a state file and a command line.
 | `daemon/`, a modified copy of librepods | GPL-3.0 | [daemon/LICENSE](daemon/LICENSE) |
 
 Shipping both in one repository is aggregation, not combination, so the widget
-stays MIT and the daemon stays GPL-3.0. What was modified, and the upstream
-commit it was forked from, are recorded in
-[daemon/UPSTREAM.md](daemon/UPSTREAM.md).
+stays MIT and the daemon stays GPL-3.0. What was modified, and the upstream commit
+it was forked from, are recorded in [daemon/UPSTREAM.md](daemon/UPSTREAM.md).
 
 The three product outlines in `AirPodsIcon.qml` are Apple's, taken from the
-chapter navigation on [apple.com/airpods](https://www.apple.com/airpods/) so the
-bar shows the hardware you actually own. AirPods, AirPods Pro and AirPods Max are
-trademarks of Apple Inc., which does not sponsor or endorse this plugin. Those
-outlines are not this project's to license, so the MIT grant above does not reach
-them and nothing here gives you permission to reuse them.
+chapter navigation on [apple.com/airpods](https://www.apple.com/airpods/).
+AirPods, AirPods Pro and AirPods Max are trademarks of Apple Inc., which does not
+sponsor or endorse this plugin. Those outlines are not this project's to license,
+so the MIT grant above does not reach them.
