@@ -6,11 +6,20 @@ set -euo pipefail
 root=$(cd "$(dirname "$0")" && pwd)
 daemon="$root/daemon"
 
+# The unit carries no filesystem sandbox of its own, so the daemon must not start unconfined.
+if [[ $(cat /sys/module/apparmor/parameters/enabled 2>/dev/null) != Y ]]; then
+  echo "setup: AppArmor is not enabled, so the librepods profile cannot confine the daemon" >&2
+  exit 1
+fi
+
 omarchy pkg add cmake ninja qt6-connectivity qt6-tools qt6-declarative pkgconf libpulse
 
 cmake -S "$daemon" -B "$daemon/build" -G Ninja -DBUILD_TESTING=OFF
 cmake --build "$daemon/build"
 cmake --install "$daemon/build" --prefix "$HOME/.local"
+
+sudo install -m 0644 "$daemon/apparmor/librepods" /etc/apparmor.d/librepods
+sudo apparmor_parser -r /etc/apparmor.d/librepods
 systemctl --user daemon-reload
 systemctl --user enable librepods.service
 # enable --now would leave an already-running daemon on the old binary after an update.

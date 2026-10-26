@@ -8,11 +8,11 @@
 #include "snaptogrid.hpp"
 
 #include <QDebug>
-#include <QProcess>
 #include <QThread>
 #include <QRegularExpression>
 #include <QDBusConnection>
 #include <QDBusConnectionInterface>
+#include <QDBusMessage>
 #include <QTimer>
 
 // Long enough to outlast an ANC or transparency reconfigure, short enough not to strand playback.
@@ -228,8 +228,12 @@ QString MediaController::getPreferredA2dpProfile() {
 
 bool MediaController::restartWirePlumber() {
   LOG_INFO("Restarting WirePlumber to rediscover A2DP profiles");
-  int result = QProcess::execute("systemctl", QStringList() << "--user" << "restart" << "wireplumber");
-  if (result == 0) {
+  // Not systemctl --user: the AppArmor profile denies systemd's private socket that systemctl uses.
+  QDBusMessage call = QDBusMessage::createMethodCall(
+      "org.freedesktop.systemd1", "/org/freedesktop/systemd1", "org.freedesktop.systemd1.Manager", "RestartUnit");
+  call << QStringLiteral("wireplumber.service") << QStringLiteral("replace");
+  const QDBusMessage reply = QDBusConnection::sessionBus().call(call);
+  if (reply.type() == QDBusMessage::ReplyMessage) {
     LOG_INFO("WirePlumber restarted successfully");
     QThread::sleep(2);
     return true;

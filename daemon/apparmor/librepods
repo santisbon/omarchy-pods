@@ -1,0 +1,83 @@
+# The daemon parses packets from any nearby Bluetooth device, so this confines it for when one takes it over.
+
+abi <abi/4.0>,
+include <tunables/global>
+
+profile librepods @{HOME}/.local/bin/librepods {
+  include <abstractions/base>
+
+  @{HOME}/.local/bin/librepods mr,
+
+  # Qt reads bluetoothd's command line to find its version.
+  /etc/machine-id r,
+  @{PROC}/sys/kernel/random/boot_id r,
+  @{PROC}/[0-9]*/cmdline r,
+  /etc/pulse/client.conf r,
+  /etc/pulse/client.conf.d/{,*} r,
+
+  # QLocalServer creates the control socket in a hidden folder and renames it into place.
+  owner @{HOME}/.config/AirPodsTrayApp/ rw,
+  owner @{HOME}/.config/AirPodsTrayApp/** rwlk,
+  owner @{HOME}/.local/state/librepods/ rw,
+  owner @{HOME}/.local/state/librepods/** rwlk,
+  owner @{run}/user/@{uid}/librepods.sock rw,
+  owner @{run}/user/@{uid}/.*/ rw,
+  owner @{run}/user/@{uid}/.*/s rw,
+
+  owner @{run}/user/@{uid}/pulse/ r,
+  owner @{run}/user/@{uid}/pulse/native rw,
+  owner @{HOME}/.config/pulse/cookie rk,
+  /dev/shm/ r,
+  owner /dev/shm/pulse-shm-* rwm,
+
+  # systemd's private socket reaches every call the session bus rules below deny, without passing through them.
+  /run/dbus/system_bus_socket rw,
+  owner @{run}/user/@{uid}/bus rw,
+  deny @{run}/user/@{uid}/systemd/** rw,
+
+  # BlueZ takes bluetooth, the HCI address-type probe takes netlink, and there is no IP networking.
+  network bluetooth,
+  network netlink raw,
+  unix,
+
+  # Children stay in this profile: bluetoothctl, Qt's bluetoothd --version, and the notification scripts.
+  /usr/bin/bluetoothctl ix,
+  /usr/libexec/bluetooth/bluetoothd ix,
+  /usr/bin/{bash,dash,sh} ix,
+  /usr/bin/{omarchy,oaxaca,oaxaca-notification-send} rix,
+  /usr/bin/busctl ix,
+  /usr/bin/dirname ix,
+  /usr/lib/cargo/bin/coreutils/* ix,
+  /dev/tty rw,
+
+  dbus send bus=system path=/org/freedesktop/DBus interface=org.freedesktop.DBus
+       peer=(name=org.freedesktop.DBus),
+  dbus send bus=system interface=org.freedesktop.DBus.{ObjectManager,Properties,Introspectable}
+       member={GetManagedObjects,Get,GetAll,Introspect} peer=(name=org.bluez),
+  dbus send bus=system interface=org.bluez.Adapter1
+       member={SetDiscoveryFilter,StartDiscovery,StopDiscovery,RemoveDevice} peer=(name=org.bluez),
+  dbus send bus=system interface=org.bluez.Device1
+       member={Connect,Disconnect,ConnectProfile,DisconnectProfile} peer=(name=org.bluez),
+  dbus send bus=system interface=org.bluez.ProfileManager1
+       member={RegisterProfile,UnregisterProfile} peer=(name=org.bluez),
+  dbus send bus=system interface=org.bluez.AgentManager1
+       member={RegisterAgent,UnregisterAgent,RequestDefaultAgent} peer=(name=org.bluez),
+  dbus send bus=system interface=org.freedesktop.DBus.Properties member={Get,GetAll}
+       peer=(name=org.freedesktop.login1),
+  dbus receive bus=system,
+
+  # RestartUnit is for WirePlumber; nothing here can start a new unit or command.
+  dbus send bus=session path=/org/freedesktop/DBus interface=org.freedesktop.DBus
+       peer=(name=org.freedesktop.DBus),
+  dbus send bus=session path=/org/mpris/MediaPlayer2
+       interface={org.mpris.MediaPlayer2.Player,org.freedesktop.DBus.Properties,org.freedesktop.DBus.Introspectable}
+       peer=(name=org.mpris.MediaPlayer2.*),
+  dbus send bus=session path=/org/freedesktop/Notifications interface=org.freedesktop.Notifications
+       member={Notify,CloseNotification,GetCapabilities,GetServerInformation}
+       peer=(name=org.freedesktop.Notifications),
+  dbus send bus=session path=/org/freedesktop/systemd1 interface=org.freedesktop.systemd1.Manager
+       member=RestartUnit peer=(name=org.freedesktop.systemd1),
+  dbus receive bus=session,
+
+  include if exists <local/librepods>
+}
