@@ -16,88 +16,37 @@ systemd's sandbox, which does not take effect on Ubuntu; see
 steps for Omarchy on Arch, is kept in [README.upstream.md](README.upstream.md); its
 panel keyboard shortcuts, settings and notes on the output codec apply here too.
 
-## Pair the AirPods
-
-Pair the AirPods before installing, or skip this section if they are already paired
-with this computer. AirPods advertise under Bluetooth Low Energy
-addresses that change, and pairing one of those from the Bluetooth panel does not
-pair the AirPods' audio link, so pair their classic Bluetooth address instead.
-The daemon still reads the Low Energy advertisements, without pairing, for the
-battery, in-ear and case lid state; audio and the controls run over the classic
-link.
-[The daemon](#the-daemon)'s continuous Low Energy scan interferes with pairing, so
-when you pair AirPods after installing, Step 1 and Step 4 stop and restart it.
-
-**Step 1.** Only if this plugin or upstream's is already installed, stop the daemon:
-
-```bash
-systemctl --user stop librepods.service
-```
-
-**Step 2.** Put the AirPods in pairing mode: AirPods in the case, lid open, and
-the case's status light flashing white. On AirPods Pro 3, double-tap the front of
-the case; on a case with a setup button on the back, press and hold the button.
-While the light flashes, scan for classic Bluetooth devices for 30 seconds:
-
-```bash
-bluetoothctl --timeout 30 scan bredr
-```
-
-Note the address on the `[NEW] Device XX:XX:XX:XX:XX:XX … AirPods …` line.
-
-**Step 3.** With the light still flashing, put that address in place of
-`XX:XX:XX:XX:XX:XX` and run:
-
-```bash
-A=XX:XX:XX:XX:XX:XX; bluetoothctl pair $A && bluetoothctl trust $A && bluetoothctl connect $A
-```
-
-It prints `Pairing successful`, then `Connection successful`.
-
-**Step 4.** Only if you stopped the daemon in Step 1, start it:
-
-```bash
-systemctl --user start librepods.service
-```
-
 ## Install
 
-[setup](#setup) asks for `sudo` twice: once to install the build tools `cmake`
-and `ninja-build`, and once to install and load
-[the AppArmor profile](#the-apparmor-profile). It stops with an error before
+Install the plugin from Oaxaca's menu, on Oaxaca's desktop package
+`oaxaca-desktop` 4.0.6+git20261027.146 or later; `oaxaca-update` brings an older
+one up to date. The menu entry removes upstream's plugin (thisisgm/omarchy-pods)
+if it is installed, adds this plugin, pairs the AirPods if they aren't paired yet,
+and runs [setup](#setup). The AirPods' pairing and settings in
+`~/.config/AirPodsTrayApp` carry over from upstream's plugin.
+
+Pair the AirPods through this menu entry, not the Bluetooth panel. The Bluetooth
+panel lists the AirPods' Bluetooth Low Energy addresses, and pairing one of those
+does not pair the AirPods' audio link.
+
+**Step 1.** Put the AirPods in the case with the lid open, close to the computer.
+
+**Step 2.** Press Super+Space and choose **Install > Service > AirPods**. A
+terminal window opens.
+
+**Step 3.** If the AirPods aren't paired with this computer, the installer asks
+"Pair AirPods with this computer now?". Answer yes. Make the case's status light
+flash white: on AirPods Pro 3, double-tap the front of the case; on a case with a
+setup button on the back, press and hold the button. Then answer yes to "Is the
+light flashing white?" and keep the lid open while the installer looks for the
+AirPods. The installer pairs and connects them on its own.
+
+**Step 4.** [setup](#setup) asks for `sudo` twice: once to install the build
+tools `cmake` and `ninja-build`, and once to install and load
+[the AppArmor profile](#the-apparmor-profile). setup stops with an error before
 building anything if AppArmor is not enabled, so [the daemon](#the-daemon) never
-runs unconfined.
-
-**Step 1.** Only if upstream's plugin (thisisgm/omarchy-pods) is installed,
-remove it. The fork keeps upstream's plugin ID, `io.github.thisisgm.omapods`, so
-the two can't be installed at once. This deletes only the plugin's folder; Step 3
-replaces upstream's daemon, and the AirPods' pairing and settings in
-`~/.config/AirPodsTrayApp` carry over:
-
-```bash
-oaxaca plugin remove io.github.thisisgm.omapods
-```
-
-**Step 2.** Add the plugin. When it asks which bar section to use, choose
-**right**:
-
-```bash
-oaxaca plugin add https://github.com/santisbon/omarchy-pods --enable
-```
-
-**Step 3.** Build and start the daemon:
-
-```bash
-~/.config/omarchy/plugins/io.github.thisisgm.omapods/setup
-```
-
-**Step 4.** Check that the daemon runs under the profile:
-
-```bash
-cat /proc/$(systemctl --user show -p MainPID --value librepods.service)/attr/current; echo
-```
-
-It prints `librepods (enforce)`.
+runs unconfined. The installer ends with "The AirPods daemon is running, confined
+by its AppArmor profile."
 
 **Step 5.** Optional. The icon stays hidden until AirPods are connected. To keep
 it visible:
@@ -126,32 +75,17 @@ oaxaca plugin update io.github.thisisgm.omapods
 
 ## Remove
 
-**Step 1.** Stop and disable the daemon, and delete the files CMake installed.
-`install_manifest.txt` is in the plugin's build folder, so this runs before the
-plugin's folder goes:
+**Step 1.** Press Super+Space and choose **Remove > Services > AirPods**. The
+remover stops the daemon, deletes the files setup installed, unloads and deletes
+the AppArmor profile (`sudo` asks you to authenticate), deletes the daemon's
+settings and status, and removes the plugin. The daemon's settings in
+`~/.config/AirPodsTrayApp` include the AirPods' pairing secrets (`magicAccIRK`,
+`magicAccEncKey`).
 
-```bash
-systemctl --user disable --now librepods.service && xargs rm -f < ~/.config/omarchy/plugins/io.github.thisisgm.omapods/daemon/build/install_manifest.txt
-```
-
-**Step 2.** Unload and delete the AppArmor profile:
-
-```bash
-sudo apparmor_parser -R /etc/apparmor.d/librepods && sudo rm /etc/apparmor.d/librepods
-```
-
-**Step 3.** Delete the daemon's settings and status. `~/.config/AirPodsTrayApp`
-holds the AirPods' pairing secrets (`magicAccIRK`, `magicAccEncKey`):
-
-```bash
-rm -rf ~/.config/AirPodsTrayApp ~/.local/state/librepods
-```
-
-**Step 4.** Remove the plugin:
-
-```bash
-oaxaca plugin remove io.github.thisisgm.omapods
-```
+**Step 2.** Optional. The remover leaves the AirPods paired with this computer.
+To unpair them, press Super+Ctrl+B to open the Bluetooth panel, hover over the
+AirPods' row and click the button whose tooltip reads **Forget**, or select the
+row and press `x`.
 
 ## Terms
 
