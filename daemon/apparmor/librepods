@@ -24,7 +24,8 @@ profile librepods @{HOME}/.local/bin/librepods {
   owner @{run}/user/@{uid}/.*/ rw,
   owner @{run}/user/@{uid}/.*/s rw,
 
-  owner @{run}/user/@{uid}/pulse/ r,
+  # libpulse chmods its runtime folder to 0700 before it connects, even when the folder exists.
+  owner @{run}/user/@{uid}/pulse/ rw,
   owner @{run}/user/@{uid}/pulse/native rw,
   owner @{HOME}/.config/pulse/cookie rk,
   /dev/shm/ r,

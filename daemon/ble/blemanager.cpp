@@ -148,7 +148,7 @@ void BleManager::startScan()
     }
 
     if (!bus.registerObject(monitorRootPath, m_root, QDBusConnection::ExportAllSlots)
-        || !bus.registerObject(monitorPath, m_monitor, QDBusConnection::ExportAllSlots | QDBusConnection::ExportAllSignals))
+        || !bus.registerObject(monitorPath, m_monitor, QDBusConnection::ExportAllSlots))
     {
         LOG_ERROR("BLE monitor: cannot export" << monitorRootPath << "on the system bus:" << bus.lastError().message());
         unregisterObjects();
