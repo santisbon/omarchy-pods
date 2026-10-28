@@ -55,7 +55,9 @@ profile librepods @{HOME}/.local/bin/librepods {
   dbus send bus=system interface=org.freedesktop.DBus.{ObjectManager,Properties,Introspectable}
        member={GetManagedObjects,Get,GetAll,Introspect} peer=(name=org.bluez),
   dbus send bus=system interface=org.bluez.Adapter1
-       member={SetDiscoveryFilter,StartDiscovery,StopDiscovery,RemoveDevice} peer=(name=org.bluez),
+       member=RemoveDevice peer=(name=org.bluez),
+  dbus send bus=system interface=org.bluez.AdvertisementMonitorManager1
+       member={RegisterMonitor,UnregisterMonitor} peer=(name=org.bluez),
   dbus send bus=system interface=org.bluez.Device1
        member={Connect,Disconnect,ConnectProfile,DisconnectProfile} peer=(name=org.bluez),
   dbus send bus=system interface=org.bluez.ProfileManager1

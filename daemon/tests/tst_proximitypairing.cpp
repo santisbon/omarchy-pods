@@ -1,23 +1,11 @@
 #include <QtTest>
-#include <QBluetoothAddress>
-#include <QBluetoothDeviceInfo>
 
-#include "../ble/blemanager.h"
-
-// main.cpp defines the Q_LOGGING_CATEGORY symbol, but tests don't link main.cpp.
-Q_LOGGING_CATEGORY(openpods, "openpods.test", QtWarningMsg)
+#include "../ble/proximitypairing.h"
 
 // Captured live: 07 19 01 27 20 21 88 8f 11 00 04 then the 16-byte encrypted payload.
 static const char *airPodsFrameHex = "071901272021888f110004b48a83d66c322a4745cb15da3fd6ab2b";
 // Captured in the same scan from another Apple device, 19 bytes and so under the fixed layout.
 static const char *otherAppleFrameHex = "071106e4dd8d647035112e2b36d341a6778984";
-
-static QBluetoothDeviceInfo advertisement(const QByteArray &data)
-{
-    QBluetoothDeviceInfo info(QBluetoothAddress("00:11:22:33:44:55"), QStringLiteral("AirPods"), 0);
-    info.setManufacturerData(0x004C, data);
-    return info;
-}
 
 // 0x10 is Apple's nearby info type, long enough to pass the size check and still not ours.
 static QByteArray typeSwapped(const QByteArray &frame)
@@ -43,25 +31,18 @@ static QByteArray withRightPodPrimary(const QByteArray &frame)
     return other;
 }
 
-// Emissions for one frame, or -1 when the slot could not be invoked at all.
+// 1 when the frame parses as AirPods, 0 when it is dropped.
 static int parseFrame(const QByteArray &frame, BleInfo *emitted)
 {
-    BleManager manager;
-    int emissions = 0;
-    QObject::connect(&manager, &BleManager::deviceFound, &manager, [&](const BleInfo &device) {
-        if (emitted)
-            *emitted = device;
-        ++emissions;
-    });
-
-    if (!QMetaObject::invokeMethod(&manager, "onDeviceDiscovered", Qt::DirectConnection,
-                                   Q_ARG(QBluetoothDeviceInfo, advertisement(frame))))
-        return -1;
-
-    return emissions;
+    BleInfo parsed;
+    if (!parseProximityPairing(QStringLiteral("00:11:22:33:44:55"), QStringLiteral("AirPods"), frame, &parsed))
+        return 0;
+    if (emitted)
+        *emitted = parsed;
+    return 1;
 }
 
-class TestBleManager : public QObject
+class TestProximityPairing : public QObject
 {
     Q_OBJECT
 
@@ -72,7 +53,7 @@ private slots:
     void podsBatteryKeepsLeftAndRightApart();
 };
 
-void TestBleManager::unparseableFrameIsDropped_data()
+void TestProximityPairing::unparseableFrameIsDropped_data()
 {
     const QByteArray airPods = QByteArray::fromHex(airPodsFrameHex);
 
@@ -84,14 +65,14 @@ void TestBleManager::unparseableFrameIsDropped_data()
     QTest::newRow("full length but not a proximity pairing type") << typeSwapped(airPods);
 }
 
-void TestBleManager::unparseableFrameIsDropped()
+void TestProximityPairing::unparseableFrameIsDropped()
 {
     QFETCH(QByteArray, frame);
 
     QCOMPARE(parseFrame(frame, nullptr), 0);
 }
 
-void TestBleManager::realAirPodsFrameIsParsed()
+void TestProximityPairing::realAirPodsFrameIsParsed()
 {
     BleInfo parsed;
 
@@ -103,7 +84,7 @@ void TestBleManager::realAirPodsFrameIsParsed()
     QCOMPARE(parsed.connectionState, BleInfo::ConnectionState::IDLE);
 }
 
-void TestBleManager::podsBatteryKeepsLeftAndRightApart()
+void TestProximityPairing::podsBatteryKeepsLeftAndRightApart()
 {
     const QByteArray unequalPods = withPodsBattery(QByteArray::fromHex(airPodsFrameHex), 0x82);
     BleInfo parsed;
@@ -118,5 +99,5 @@ void TestBleManager::podsBatteryKeepsLeftAndRightApart()
     QCOMPARE(parsed.rightPodBattery, 20);
 }
 
-QTEST_GUILESS_MAIN(TestBleManager)
-#include "tst_blemanager.moc"
+QTEST_GUILESS_MAIN(TestProximityPairing)
+#include "tst_proximitypairing.moc"

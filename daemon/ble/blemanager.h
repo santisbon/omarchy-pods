@@ -2,67 +2,16 @@
 #define BLEMANAGER_H
 
 #include <QObject>
-#include <QBluetoothDeviceDiscoveryAgent>
-#include <QMap>
+#include <QHash>
 #include <QString>
-#include <QDateTime>
-#include "enums.h"
+#include "proximitypairing.h"
 
-class QTimer;
+class QDBusMessage;
+class QDBusPendingCallWatcher;
+class AdvertisementMonitorRoot;
+class AdvertisementMonitor;
 
-class BleInfo
-{
-public:
-    QString name;
-    QString address;
-    int leftPodBattery = -1; // -1 indicates not available
-    int rightPodBattery = -1;
-    int caseBattery = -1;
-    bool leftCharging = false;
-    bool rightCharging = false;
-    bool caseCharging = false;
-    AirpodsTrayApp::Enums::AirPodsModel modelName = AirpodsTrayApp::Enums::AirPodsModel::Unknown;
-    quint8 lidOpenCounter = 0;
-    QString color = "Unknown"; // Default color
-    quint8 status = 0;
-    QByteArray rawData;
-    QByteArray encryptedPayload; // 16 bytes of encrypted payload
-
-    // Additional status flags from Kotlin version
-    bool isLeftPodInEar = false;
-    bool isRightPodInEar = false;
-    bool isPrimaryInEar = false;
-    bool isSecondaryInEar = false;
-    bool isLeftPodMicrophone = false;
-    bool isRightPodMicrophone = false;
-    bool isThisPodInTheCase = false;
-    bool isOnePodInCase = false;
-    bool areBothPodsInCase = false;
-    bool primaryLeft = true; // True if left pod is primary, false if right pod is primary
-
-    // Lid state enumeration
-    enum class LidState
-    {
-        OPEN = 0x0,
-        CLOSED = 0x1,
-        UNKNOWN,
-    } lidState = LidState::UNKNOWN;
-
-    // Connection state enumeration
-    enum class ConnectionState : uint8_t
-    {
-        DISCONNECTED = 0x00,
-        IDLE = 0x04,
-        MUSIC = 0x05,
-        CALL = 0x06,
-        RINGING = 0x07,
-        HANGING_UP = 0x09,
-        UNKNOWN = 0xFF // Using 0xFF for representing null in the original
-    } connectionState = ConnectionState::UNKNOWN;
-
-    QDateTime lastSeen; // Timestamp of last detection
-};
-
+// A BlueZ advertisement monitor, not discovery, which would stop the background scan bonded keyboards reconnect through.
 class BleManager : public QObject
 {
     Q_OBJECT
@@ -74,20 +23,33 @@ public:
     void stopScan();
     bool isScanning() const;
 
-private slots:
-    void onDeviceDiscovered(const QBluetoothDeviceInfo &info);
-    void onScanFinished();
-    void onErrorOccurred(QBluetoothDeviceDiscoveryAgent::Error error);
-
 signals:
     void deviceFound(const BleInfo &device);
 
+private slots:
+    void onRegisterFinished(QDBusPendingCallWatcher *watcher);
+    void onMonitorReleased();
+    void onDeviceFound(const QString &devicePath);
+    void onDeviceLost(const QString &devicePath);
+    void onDeviceProperties(QDBusPendingCallWatcher *watcher);
+    void onDevicePropertiesChanged(const QDBusMessage &message);
+
 private:
-    // Default-init so a partial construction (or a refactor that
-    // skips the explicit ctor body) doesn't leave a dangling pointer
-    // that start/stop/isScan would dereference. Real assignment
-    // happens in BleManager::BleManager() via parented `new`.
-    QBluetoothDeviceDiscoveryAgent *discoveryAgent = nullptr;
+    struct WatchedDevice
+    {
+        QString address;
+        QString name;
+    };
+
+    void unwatchDevice(const QString &devicePath);
+    void unregisterObjects();
+    void parseAppleData(const QString &devicePath, const QVariant &manufacturerData);
+
+    AdvertisementMonitorRoot *m_root = nullptr;
+    AdvertisementMonitor *m_monitor = nullptr;
+    QString m_adapterPath;
+    bool m_registered = false;
+    QHash<QString, WatchedDevice> m_devices;
 };
 
 #endif // BLEMANAGER_H

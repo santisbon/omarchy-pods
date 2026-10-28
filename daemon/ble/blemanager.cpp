@@ -1,241 +1,297 @@
 #include "blemanager.h"
-#include "enums.h"
-#include <QDebug>
-#include <QTimer>
 #include "logger.h"
-#include <QMap>
+#include <QDBusArgument>
+#include <QDBusConnection>
+#include <QDBusMessage>
+#include <QDBusMetaType>
+#include <QDBusObjectPath>
+#include <QDBusPendingCallWatcher>
+#include <QDBusPendingReply>
+#include <QDBusReply>
+#include <QDBusVariant>
 
-// Fixed header data[0] through data[10], then a 16-byte encrypted payload.
-static constexpr int proximityPairingBytes = 11 + 16;
-
-AirpodsTrayApp::Enums::AirPodsModel getModelName(quint16 modelId)
-{
-    using namespace AirpodsTrayApp::Enums;
-    static const QMap<quint16, AirPodsModel> modelMap = {
-        {0x0220, AirPodsModel::AirPods1},
-        {0x0F20, AirPodsModel::AirPods2},
-        {0x1320, AirPodsModel::AirPods3},
-        {0x1920, AirPodsModel::AirPods4},
-        {0x1B20, AirPodsModel::AirPods4ANC},
-        {0x0A20, AirPodsModel::AirPodsMaxLightning},
-        {0x1F20, AirPodsModel::AirPodsMaxUSBC},
-        {0x0E20, AirPodsModel::AirPodsPro},
-        {0x1420, AirPodsModel::AirPodsPro2Lightning},
-        {0x2420, AirPodsModel::AirPodsPro2USBC},
-        // Apple product 0x2027 arrives byte-swapped, so data[3] is 0x27 and this key is 0x2720.
-        {0x2720, AirPodsModel::AirPodsPro3}
-        // No AirPods Max 2 id yet: AAP names it instead, and an unrecognized id is ignored.
-    };
-
-    return modelMap.value(modelId, AirPodsModel::Unknown);
+namespace {
+const QString bluezService = QStringLiteral("org.bluez");
+const QString monitorManagerInterface = QStringLiteral("org.bluez.AdvertisementMonitorManager1");
+const QString monitorInterface = QStringLiteral("org.bluez.AdvertisementMonitor1");
+const QString deviceInterface = QStringLiteral("org.bluez.Device1");
+const QString propertiesInterface = QStringLiteral("org.freedesktop.DBus.Properties");
+const QString monitorRootPath = QStringLiteral("/org/librepods/monitor");
+const QString monitorPath = QStringLiteral("/org/librepods/monitor/airpods");
+constexpr quint16 appleCompanyId = 0x004C;
+constexpr quint8 manufacturerDataType = 0xFF;
+// Apple's company id, little-endian, then the proximity pairing message type the parser reads.
+const QByteArray airPodsAdvertisementPrefix = QByteArray::fromHex("4c0007");
 }
 
-QString getColorName(quint8 colorId)
+// One entry of the monitor's Patterns property, D-Bus signature (yyay).
+struct MonitorPattern
 {
-    switch (colorId)
+    quint8 start = 0;
+    quint8 adType = 0;
+    QByteArray content;
+};
+using MonitorPatterns = QList<MonitorPattern>;
+using InterfaceProperties = QMap<QString, QVariantMap>;
+using ManagedObjects = QMap<QDBusObjectPath, InterfaceProperties>;
+Q_DECLARE_METATYPE(MonitorPattern)
+Q_DECLARE_METATYPE(InterfaceProperties)
+Q_DECLARE_METATYPE(ManagedObjects)
+
+QDBusArgument &operator<<(QDBusArgument &argument, const MonitorPattern &pattern)
+{
+    argument.beginStructure();
+    argument << pattern.start << pattern.adType << pattern.content;
+    argument.endStructure();
+    return argument;
+}
+
+const QDBusArgument &operator>>(const QDBusArgument &argument, MonitorPattern &pattern)
+{
+    argument.beginStructure();
+    argument >> pattern.start >> pattern.adType >> pattern.content;
+    argument.endStructure();
+    return argument;
+}
+
+static MonitorPatterns airPodsPatterns()
+{
+    return {MonitorPattern{0, manufacturerDataType, airPodsAdvertisementPrefix}};
+}
+
+// BlueZ reads the monitor's properties from this object's GetManagedObjects when RegisterMonitor names it.
+class AdvertisementMonitorRoot : public QObject
+{
+    Q_OBJECT
+    Q_CLASSINFO("D-Bus Interface", "org.freedesktop.DBus.ObjectManager")
+public:
+    using QObject::QObject;
+
+public slots:
+    ManagedObjects GetManagedObjects()
     {
-    case 0x00:
-        return "White";
-    case 0x01:
-        return "Black";
-    case 0x02:
-        return "Red";
-    case 0x03:
-        return "Blue";
-    case 0x04:
-        return "Pink";
-    case 0x05:
-        return "Gray";
-    case 0x06:
-        return "Silver";
-    case 0x07:
-        return "Gold";
-    case 0x08:
-        return "Rose Gold";
-    case 0x09:
-        return "Space Gray";
-    case 0x0A:
-        return "Dark Blue";
-    case 0x0B:
-        return "Light Blue";
-    case 0x0C:
-        return "Yellow";
-    default:
-        return "Unknown";
+        QVariantMap properties;
+        properties.insert(QStringLiteral("Type"), QStringLiteral("or_patterns"));
+        properties.insert(QStringLiteral("Patterns"), QVariant::fromValue(airPodsPatterns()));
+        ManagedObjects objects;
+        objects.insert(QDBusObjectPath(monitorPath), {{monitorInterface, properties}});
+        return objects;
     }
-}
+};
 
-QString getConnectionStateName(BleInfo::ConnectionState state)
+class AdvertisementMonitor : public QObject
 {
-    using ConnectionState = BleInfo::ConnectionState;
-    switch (state)
-    {
-    case ConnectionState::DISCONNECTED:
-        return QString("Disconnected");
-    case ConnectionState::IDLE:
-        return QString("Idle");
-    case ConnectionState::MUSIC:
-        return QString("Playing Music");
-    case ConnectionState::CALL:
-        return QString("On Call");
-    case ConnectionState::RINGING:
-        return QString("Ringing");
-    case ConnectionState::HANGING_UP:
-        return QString("Hanging Up");
-    case ConnectionState::UNKNOWN:
-    default:
-        return QString("Unknown");
-    }
-}
+    Q_OBJECT
+    Q_CLASSINFO("D-Bus Interface", "org.bluez.AdvertisementMonitor1")
+public:
+    using QObject::QObject;
+
+public slots:
+    void Release() { emit released(); }
+    void Activate() { LOG_INFO("BlueZ activated the AirPods advertisement monitor"); }
+    void DeviceFound(const QDBusObjectPath &device) { emit deviceFound(device.path()); }
+    void DeviceLost(const QDBusObjectPath &device) { emit deviceLost(device.path()); }
+
+signals:
+    void released();
+    void deviceFound(const QString &devicePath);
+    void deviceLost(const QString &devicePath);
+};
 
 BleManager::BleManager(QObject *parent) : QObject(parent)
 {
-    discoveryAgent = new QBluetoothDeviceDiscoveryAgent(this);
-    discoveryAgent->setLowEnergyDiscoveryTimeout(0); // Continuous scanning
+    qDBusRegisterMetaType<MonitorPattern>();
+    qDBusRegisterMetaType<MonitorPatterns>();
+    qDBusRegisterMetaType<InterfaceProperties>();
+    qDBusRegisterMetaType<ManagedObjects>();
 
-    connect(discoveryAgent, &QBluetoothDeviceDiscoveryAgent::deviceDiscovered,
-            this, &BleManager::onDeviceDiscovered);
-    connect(discoveryAgent, &QBluetoothDeviceDiscoveryAgent::finished,
-            this, &BleManager::onScanFinished);
-    connect(discoveryAgent, &QBluetoothDeviceDiscoveryAgent::errorOccurred,
-            this, &BleManager::onErrorOccurred);
+    m_root = new AdvertisementMonitorRoot(this);
+    m_monitor = new AdvertisementMonitor(this);
+    connect(m_monitor, &AdvertisementMonitor::released, this, &BleManager::onMonitorReleased);
+    connect(m_monitor, &AdvertisementMonitor::deviceFound, this, &BleManager::onDeviceFound);
+    connect(m_monitor, &AdvertisementMonitor::deviceLost, this, &BleManager::onDeviceLost);
 }
 
 BleManager::~BleManager()
 {
-    // discoveryAgent is QObject-parented to `this` (see ctor:
-    // `new QBluetoothDeviceDiscoveryAgent(this)`). Qt's parent-child
-    // ownership deletes it for us when this dtor returns — the
-    // explicit `delete discoveryAgent` that used to live here was
-    // redundant and ran before Qt's own child cleanup pass. Now empty.
+    stopScan();
 }
 
 void BleManager::startScan()
 {
-    LOG_DEBUG("Starting BLE scan...");
-    discoveryAgent->start(QBluetoothDeviceDiscoveryAgent::LowEnergyMethod);
+    if (m_registered)
+        return;
+
+    QDBusConnection bus = QDBusConnection::systemBus();
+    QDBusMessage objectsCall = QDBusMessage::createMethodCall(
+        bluezService, QStringLiteral("/"), QStringLiteral("org.freedesktop.DBus.ObjectManager"),
+        QStringLiteral("GetManagedObjects"));
+    QDBusReply<ManagedObjects> objects = bus.call(objectsCall);
+    if (!objects.isValid())
+    {
+        LOG_ERROR("BLE monitor: cannot list BlueZ objects:" << objects.error().message());
+        return;
+    }
+    m_adapterPath.clear();
+    for (auto it = objects.value().cbegin(); it != objects.value().cend(); ++it)
+    {
+        if (it.value().contains(monitorManagerInterface))
+        {
+            m_adapterPath = it.key().path();
+            break;
+        }
+    }
+    if (m_adapterPath.isEmpty())
+    {
+        LOG_ERROR("BLE monitor: no Bluetooth adapter offers" << monitorManagerInterface);
+        return;
+    }
+
+    if (!bus.registerObject(monitorRootPath, m_root, QDBusConnection::ExportAllSlots)
+        || !bus.registerObject(monitorPath, m_monitor, QDBusConnection::ExportAllSlots | QDBusConnection::ExportAllSignals))
+    {
+        LOG_ERROR("BLE monitor: cannot export" << monitorRootPath << "on the system bus:" << bus.lastError().message());
+        unregisterObjects();
+        return;
+    }
+
+    LOG_DEBUG("Registering the AirPods advertisement monitor on" << m_adapterPath);
+    QDBusMessage registerCall = QDBusMessage::createMethodCall(
+        bluezService, m_adapterPath, monitorManagerInterface, QStringLiteral("RegisterMonitor"));
+    registerCall << QVariant::fromValue(QDBusObjectPath(monitorRootPath));
+    // Asynchronous, because BlueZ calls GetManagedObjects on this process before it replies.
+    auto *watcher = new QDBusPendingCallWatcher(bus.asyncCall(registerCall), this);
+    connect(watcher, &QDBusPendingCallWatcher::finished, this, &BleManager::onRegisterFinished);
+    m_registered = true;
 }
 
 void BleManager::stopScan()
 {
-    LOG_DEBUG("Stopping BLE scan...");
-    discoveryAgent->stop();
+    if (!m_registered)
+        return;
+
+    LOG_DEBUG("Unregistering the AirPods advertisement monitor");
+    QDBusMessage unregisterCall = QDBusMessage::createMethodCall(
+        bluezService, m_adapterPath, monitorManagerInterface, QStringLiteral("UnregisterMonitor"));
+    unregisterCall << QVariant::fromValue(QDBusObjectPath(monitorRootPath));
+    QDBusConnection::systemBus().call(unregisterCall, QDBus::NoBlock);
+    unregisterObjects();
 }
 
 bool BleManager::isScanning() const
 {
-    return discoveryAgent->isActive();
+    return m_registered;
 }
 
-void BleManager::onDeviceDiscovered(const QBluetoothDeviceInfo &info)
+void BleManager::onRegisterFinished(QDBusPendingCallWatcher *watcher)
 {
-    // Check for Apple's manufacturer ID (0x004C)
-    if (info.manufacturerData().contains(0x004C))
+    QDBusPendingReply<> reply = *watcher;
+    watcher->deleteLater();
+    if (reply.isError())
     {
-        QByteArray data = info.manufacturerData().value(0x004C);
-        // Sample input: 07 19 01 27 20 21 88 8F 11 00 04 <16 encrypted bytes>
-        // A shorter frame reads past data[10] and slices a wrong payload below, and any BLE device in range can send one.
-        if (data.size() >= proximityPairingBytes && data[0] == 0x07)
-        {
-            QString address = info.address().toString();
-            BleInfo deviceInfo;
-            deviceInfo.name = info.name().isEmpty() ? "AirPods" : info.name();
-            deviceInfo.address = address;
-            deviceInfo.rawData = data.left(data.size() - 16);
-            deviceInfo.encryptedPayload = data.mid(data.size() - 16);
-
-            // data[1] is the length of the data, so we can skip it
-
-            // Check if pairing mode is paired (0x01) or pairing (0x00)
-            if (data[2] == 0x00)
-            {
-                return; // Skip pairing mode devices (the values are differently structured)
-            }
-
-            
-            // Parse device model (big-endian: high byte at data[3], low byte at data[4])
-            deviceInfo.modelName = getModelName(static_cast<quint16>(data[4]) | (static_cast<quint8>(data[3]) << 8));
-
-            // Status byte for primary pod and other flags
-            quint8 status = static_cast<quint8>(data[5]);
-            deviceInfo.status = status;
-
-            // Pods battery byte (upper nibble: one pod, lower nibble: other pod)
-            quint8 podsBatteryByte = static_cast<quint8>(data[6]);
-
-            // Flags and case battery byte (upper nibble: case battery, lower nibble: flags)
-            quint8 flagsAndCaseBattery = static_cast<quint8>(data[7]);
-
-            // Lid open counter and device color
-            quint8 lidIndicator = static_cast<quint8>(data[8]);
-            deviceInfo.color = getColorName((quint8)(data[9]));
-
-            deviceInfo.connectionState = static_cast<BleInfo::ConnectionState>(data[10]);
-
-            // Next: Encrypted Payload: 16 bytes
-
-            // Determine primary pod (bit 5 of status) and value flipping
-            bool primaryLeft = (status & 0x20) != 0; // Bit 5: 1 = left primary, 0 = right primary
-            bool areValuesFlipped = !primaryLeft;    // Flipped when right pod is primary
-
-            deviceInfo.primaryLeft = primaryLeft; // Store primary pod information
-
-            // Parse battery levels
-            int leftNibble = areValuesFlipped ? (podsBatteryByte >> 4) & 0x0F : podsBatteryByte & 0x0F;
-            int rightNibble = areValuesFlipped ? podsBatteryByte & 0x0F : (podsBatteryByte >> 4) & 0x0F;
-            deviceInfo.leftPodBattery = (leftNibble == 15) ? -1 : leftNibble * 10;
-            deviceInfo.rightPodBattery = (rightNibble == 15) ? -1 : rightNibble * 10;
-            int caseNibble = flagsAndCaseBattery & 0x0F; // Extracts lower nibble
-            deviceInfo.caseBattery = (caseNibble == 15) ? -1 : caseNibble * 10;
-
-            // Parse charging statuses from flags (uper 4 bits of data[7])
-            quint8 flags = (flagsAndCaseBattery >> 4) & 0x0F;                                        // Extracts lower nibble
-            deviceInfo.rightCharging = areValuesFlipped ? (flags & 0x01) != 0 : (flags & 0x02) != 0; // Depending on primary, bit 0 or 1
-            deviceInfo.leftCharging = areValuesFlipped ? (flags & 0x02) != 0 : (flags & 0x01) != 0;  // Depending on primary, bit 1 or 0
-            deviceInfo.caseCharging = (flags & 0x04) != 0;                                           // bit 2
-
-            // Additional status flags from status byte (data[5])
-            deviceInfo.isThisPodInTheCase = (status & 0x40) != 0; // Bit 6
-            deviceInfo.isOnePodInCase = (status & 0x10) != 0;     // Bit 4
-            deviceInfo.areBothPodsInCase = (status & 0x04) != 0;  // Bit 2
-
-            // In-ear detection with XOR logic
-            bool xorFactor = areValuesFlipped ^ deviceInfo.isThisPodInTheCase;
-            deviceInfo.isLeftPodInEar = xorFactor ? (status & 0x08) != 0 : (status & 0x02) != 0;  // Bit 3 or 1
-            deviceInfo.isRightPodInEar = xorFactor ? (status & 0x02) != 0 : (status & 0x08) != 0; // Bit 1 or 3
-
-            // Determine primary and secondary in-ear status
-            deviceInfo.isPrimaryInEar = primaryLeft ? deviceInfo.isLeftPodInEar : deviceInfo.isRightPodInEar;
-            deviceInfo.isSecondaryInEar = primaryLeft ? deviceInfo.isRightPodInEar : deviceInfo.isLeftPodInEar;
-
-            // Microphone status
-            deviceInfo.isLeftPodMicrophone = primaryLeft ^ deviceInfo.isThisPodInTheCase;
-            deviceInfo.isRightPodMicrophone = !primaryLeft ^ deviceInfo.isThisPodInTheCase;
-
-            deviceInfo.lidOpenCounter = lidIndicator & 0x07; // Extract bits 0-2 (count)
-            quint8 lidState = static_cast<quint8>((lidIndicator >> 3) & 0x01); // Extract bit 3 (lid state)
-            if (deviceInfo.isThisPodInTheCase) {
-                deviceInfo.lidState = static_cast<BleInfo::LidState>(lidState);
-            }
-
-            // Update timestamp
-            deviceInfo.lastSeen = QDateTime::currentDateTime();
-
-            emit deviceFound(deviceInfo); // Emit signal for device found
-        }
+        LOG_ERROR("BLE monitor: RegisterMonitor on" << m_adapterPath << "failed:" << reply.error().name() << reply.error().message());
+        unregisterObjects();
     }
 }
 
-void BleManager::onScanFinished()
+void BleManager::onMonitorReleased()
 {
-    if (discoveryAgent->isActive())
-    {
-        discoveryAgent->start(QBluetoothDeviceDiscoveryAgent::LowEnergyMethod);
-    }
+    LOG_WARN("BLE monitor: BlueZ released the AirPods advertisement monitor");
+    unregisterObjects();
 }
 
-void BleManager::onErrorOccurred(QBluetoothDeviceDiscoveryAgent::Error error)
+void BleManager::onDeviceFound(const QString &devicePath)
 {
-    LOG_ERROR("BLE scan error occurred:" << error);
-    stopScan();
+    if (m_devices.contains(devicePath))
+        return;
+    LOG_DEBUG("BLE monitor matched" << devicePath);
+    m_devices.insert(devicePath, {});
+    QDBusConnection::systemBus().connect(bluezService, devicePath, propertiesInterface, QStringLiteral("PropertiesChanged"),
+                                         this, SLOT(onDevicePropertiesChanged(QDBusMessage)));
+    QDBusMessage getAll = QDBusMessage::createMethodCall(bluezService, devicePath, propertiesInterface, QStringLiteral("GetAll"));
+    getAll << deviceInterface;
+    auto *watcher = new QDBusPendingCallWatcher(QDBusConnection::systemBus().asyncCall(getAll), this);
+    watcher->setProperty("devicePath", devicePath);
+    connect(watcher, &QDBusPendingCallWatcher::finished, this, &BleManager::onDeviceProperties);
 }
+
+void BleManager::onDeviceLost(const QString &devicePath)
+{
+    unwatchDevice(devicePath);
+}
+
+void BleManager::onDeviceProperties(QDBusPendingCallWatcher *watcher)
+{
+    const QString devicePath = watcher->property("devicePath").toString();
+    QDBusPendingReply<QVariantMap> reply = *watcher;
+    watcher->deleteLater();
+    if (!m_devices.contains(devicePath))
+        return;
+    if (reply.isError())
+    {
+        LOG_WARN("BLE monitor: cannot read" << devicePath << ":" << reply.error().message());
+        return;
+    }
+    const QVariantMap properties = reply.value();
+    WatchedDevice &device = m_devices[devicePath];
+    device.address = properties.value(QStringLiteral("Address")).toString();
+    device.name = properties.value(QStringLiteral("Alias")).toString();
+    if (properties.contains(QStringLiteral("ManufacturerData")))
+        parseAppleData(devicePath, properties.value(QStringLiteral("ManufacturerData")));
+}
+
+void BleManager::onDevicePropertiesChanged(const QDBusMessage &message)
+{
+    // Sample input: ("org.bluez.Device1", {"ManufacturerData": {76: <ay>}, "RSSI": -60}, [])
+    const QList<QVariant> arguments = message.arguments();
+    if (arguments.size() < 2 || arguments.at(0).toString() != deviceInterface || !m_devices.contains(message.path()))
+        return;
+    const QVariantMap changed = qdbus_cast<QVariantMap>(arguments.at(1));
+    if (changed.contains(QStringLiteral("ManufacturerData")))
+        parseAppleData(message.path(), changed.value(QStringLiteral("ManufacturerData")));
+}
+
+void BleManager::parseAppleData(const QString &devicePath, const QVariant &manufacturerData)
+{
+    // Sample input: a{qv} {76: <[0x07, 0x19, 0x01, 0x27, 0x20, ...]>}
+    QByteArray appleData;
+    const QDBusArgument argument = manufacturerData.value<QDBusArgument>();
+    argument.beginMap();
+    while (!argument.atEnd())
+    {
+        quint16 companyId = 0;
+        QDBusVariant value;
+        argument.beginMapEntry();
+        argument >> companyId >> value;
+        argument.endMapEntry();
+        if (companyId == appleCompanyId)
+            appleData = value.variant().toByteArray();
+    }
+    argument.endMap();
+
+    const WatchedDevice &device = m_devices.value(devicePath);
+    BleInfo info;
+    if (parseProximityPairing(device.address, device.name, appleData, &info))
+        emit deviceFound(info);
+}
+
+void BleManager::unwatchDevice(const QString &devicePath)
+{
+    if (m_devices.remove(devicePath) == 0)
+        return;
+    QDBusConnection::systemBus().disconnect(bluezService, devicePath, propertiesInterface, QStringLiteral("PropertiesChanged"),
+                                            this, SLOT(onDevicePropertiesChanged(QDBusMessage)));
+}
+
+void BleManager::unregisterObjects()
+{
+    const QStringList devicePaths = m_devices.keys();
+    for (const QString &devicePath : devicePaths)
+        unwatchDevice(devicePath);
+    QDBusConnection bus = QDBusConnection::systemBus();
+    bus.unregisterObject(monitorPath);
+    bus.unregisterObject(monitorRootPath);
+    m_registered = false;
+}
+
+#include "blemanager.moc"

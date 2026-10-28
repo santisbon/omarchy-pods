@@ -16,6 +16,7 @@
 #include <fcntl.h>
 #include <memory>
 #include <unistd.h>
+#include <QBluetoothDeviceInfo>
 #include <QBluetoothLocalDevice>
 #include <QBluetoothSocket>
 #include <QQuickWindow>
@@ -1495,7 +1496,7 @@ private slots:
             // Only adopt the BLE-broadcast model when it's actually
             // recognized. AirPods Pro 3 (and any future model whose
             // manufacturer-data fingerprint hasn't been added to
-            // ble/blemanager.cpp's modelMap yet) reports Unknown here,
+            // ble/proximitypairing.cpp's modelMap yet) reports Unknown here,
             // which would otherwise clobber a valid model from the
             // AAP metadata packet on the L2CAP side.
             if (device.modelName != AirPodsModel::Unknown) {
