@@ -104,6 +104,7 @@ install(TARGETS librepods
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 # No launcher entry: the AppArmor profile, attached by path, denies the window a display, so Qt aborts at start.
+# assets/me.kavishdevar.librepods.desktop stays: Oaxaca's migration deletes an installed copy only if it matches.
 install(FILES assets/librepods.svg
     DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/apps")
 # With the documented --prefix ~/.local this lands in ~/.local/share/systemd/user, which systemd searches.
