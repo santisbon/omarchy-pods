@@ -61,6 +61,10 @@ matter to this widget:
   need, so they were never applied.
 - **WirePlumber is restarted over D-Bus** (`RestartUnit` on the session bus)
   instead of `systemctl --user`, whose private socket the profile denies.
+- **No launcher entry is installed.** The profile attaches to every process
+  started from `~/.local/bin/librepods` and denies the Wayland socket and fonts,
+  so the window that `me.kavishdevar.librepods.desktop` starts aborts in Qt
+  before it opens. The bar is the interface.
 
 See the repository README's "What changed in the fork" for the reasons and the
 checks.

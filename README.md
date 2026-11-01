@@ -189,7 +189,8 @@ skipped:
 | [`daemon/apparmor/librepods`](daemon/apparmor/librepods) | New: [the AppArmor profile](#the-apparmor-profile). |
 | [`daemon/librepods.service`](daemon/librepods.service) | The capability and namespace settings are removed. `NoNewPrivileges`, `RestrictSUIDSGID`, `RestrictNamespaces`, `LockPersonality`, `SystemCallArchitectures`, `RestrictAddressFamilies=AF_UNIX AF_BLUETOOTH AF_NETLINK` (no IP networking) and `UMask=0077` stay; they work without namespaces. |
 | [`daemon/media/mediacontroller.cpp`](daemon/media/mediacontroller.cpp) | The WirePlumber restart is a D-Bus `RestartUnit` call on the session bus instead of `systemctl --user restart wireplumber`. `systemctl --user` uses systemd's private socket, which the profile denies. |
-| [`setup`](setup) | Stops if AppArmor is not enabled, then installs the profile to `/etc/apparmor.d/librepods` and loads it with `apparmor_parser -r`. |
+| [`daemon/CMakeLists.txt`](daemon/CMakeLists.txt) | Installs no launcher entry. [The AppArmor profile](#the-apparmor-profile) denies the daemon the Wayland socket and fonts, so the window that upstream's `me.kavishdevar.librepods.desktop` starts aborts in Qt before it opens. [The panel](#the-panel) is the interface. |
+| [`setup`](setup) | Stops if AppArmor is not enabled, then installs the profile to `/etc/apparmor.d/librepods` and loads it with `apparmor_parser -r`. Deletes `~/.local/share/applications/me.kavishdevar.librepods.desktop`, the launcher entry earlier versions installed. |
 
 ### What the profile allows
 

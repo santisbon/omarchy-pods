@@ -17,6 +17,8 @@ omarchy pkg add cmake ninja qt6-connectivity qt6-tools qt6-declarative pkgconf l
 cmake -S "$daemon" -B "$daemon/build" -G Ninja -DBUILD_TESTING=OFF
 cmake --build "$daemon/build"
 cmake --install "$daemon/build" --prefix "$HOME/.local"
+# Earlier versions installed a launcher entry whose window the AppArmor profile cannot let start.
+rm -f "$HOME/.local/share/applications/me.kavishdevar.librepods.desktop"
 
 sudo install -m 0644 "$daemon/apparmor/librepods" /etc/apparmor.d/librepods
 sudo apparmor_parser -r /etc/apparmor.d/librepods

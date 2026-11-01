@@ -103,8 +103,7 @@ install(TARGETS librepods
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
-install(FILES assets/me.kavishdevar.librepods.desktop
-    DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/applications")
+# No launcher entry: the AppArmor profile, attached by path, denies the window a display, so Qt aborts at start.
 install(FILES assets/librepods.svg
     DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/apps")
 # With the documented --prefix ~/.local this lands in ~/.local/share/systemd/user, which systemd searches.
